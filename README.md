@@ -31,8 +31,8 @@ A retro pixel-art train simulator inspired by Bangladesh Railway, featuring the 
 | **Doors** | `O` | Open / Close passenger doors at platform |
 | **Horn** | `H` | Sound dual-tone air horn |
 | **Headlight** | `L` | Toggle locomotive headlight beam |
-| **Monsoon** | `W` | Cycle Weather (Clear, Drizzle, Torrential Downpour, Thunderstorm ⚡) |
-| **Time of Day** | `T` | Cycle Time (Dawn 🌅, Day ☀️, Dusk 🌇, Night 🌙, Auto 🔄) |
+| **Monsoon** | `W` | Cycle Weather (Clear, Drizzle, Torrential Downpour, Thunderstorm ) |
+| **Time of Day** | `T` | Cycle Time (Dawn , Day , Dusk , Night , Auto ) |
 | **Pause** | `P` / `Space` | Pause / Resume |
 | **Speed** | `1` / `2` / `4` | 1x, 2x, 4x speed multiplier |
 | **Next Station** | `N` | Skip to next station |
