@@ -1,0 +1,706 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Intercity Pixel Train: Dhaka to Chittagong Line (বাংলাদেশ রেলওয়ে)</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #080a10; color: #fff; font-family: monospace; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; overflow: hidden; }
+  #game-container { display: flex; flex-direction: column; align-items: center; gap: 8px; width: 100%; max-width: 960px; padding: 10px; }
+  canvas#screen { width: 100%; height: auto; max-height: 540px; image-rendering: pixelated; image-rendering: crisp-edges; border: 2px solid #283446; background: #000; border-radius: 4px; box-shadow: 0 8px 24px rgba(0,0,0,0.7); }
+  #bar { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; width: 100%; background: #121722; padding: 8px; border-radius: 6px; border: 1px solid #243042; }
+  #bar button { background: #1c2434; border: 1px solid #36465e; color: #d0e0f0; font-family: monospace; font-weight: bold; font-size: 11px; padding: 6px 10px; border-radius: 4px; cursor: pointer; transition: all 0.15s; display: inline-flex; align-items: center; gap: 4px; }
+  #bar button:hover, #bar button.active { background: #26344a; color: #ffe664; border-color: #ffe664; box-shadow: 0 0 6px rgba(255,230,100,0.4); }
+  #bar button:active { transform: translateY(1px); }
+  #bar button.big { font-size: 13px; font-weight: bold; background: #222d3e; }
+  #bar button[hidden] { display: none !important; }
+  .tip { color: #8a9bb0; font-size: 12px; margin-top: 4px; text-align: center; }
+</style>
+</head>
+<body>
+<div id="game-container">
+  <canvas id="screen" width="320" height="180"></canvas>
+  <div id="bar" role="toolbar" aria-label="Train controls">
+    <button id="b-mode" type="button" title="Drive mode (C)"><span>AUTO</span></button>
+    <button id="b-engine" type="button" class="drv" hidden title="Engine start/stop (E)"><span>START</span></button>
+    <button id="b-power" type="button" class="drv" hidden title="Power notch up (Up Arrow)"><span>POWER ▲</span></button>
+    <button id="b-brake" type="button" class="drv" hidden title="Power notch down / brake (Down Arrow, B = emergency)"><span>BRAKE ▼</span></button>
+    <button id="b-doors" type="button" class="drv" hidden title="Doors (O)"><span>DOORS</span></button>
+    <button id="b-horn" type="button" class="drv" hidden title="Horn (hold H)"><span>HORN 🕪</span></button>
+    <button id="b-light" type="button" class="drv" hidden title="Headlight (L)"><span>LIGHT 💡</span></button>
+    <button id="b-pause" type="button" title="Pause (P)"><span>PAUSE ⏸</span></button>
+    <button id="b-speed" type="button" class="big" title="Speed (1 / 2 / 4)">1x</button>
+    <button id="b-skip" type="button" title="Next station (N)"><span>NEXT ⏭</span></button>
+    <button id="b-time" type="button" title="Time of day (T)"><span>TIME ☀️</span></button>
+    <button id="b-rain" type="button" title="Monsoon & Thunderstorm (W)"><span>MONSOON ⛈</span></button>
+    <button id="b-mute" type="button" title="Sound (M)"><span>SOUND 🔊</span></button>
+  </div>
+  <div class="tip">Click canvas or press <b>C</b> to drive | <b>E</b> Engine | <b>↑/↓</b> Power/Brake | <b>O</b> Doors | <b>H</b> Horn | <b>T</b> Time | <b>W</b> Monsoon</div>
+</div>
+
+<script>
+const canvas = document.getElementById('screen');
+const ctx = canvas.getContext('2d');
+const W = 320, H = 180;
+
+// 5 Stations Requested
+const ROUTE = [
+  { en: 'KAMALAPUR', bn: 'কমলাপুর', code: 'DHK', km: 0, platform: [-330, 650], roof: 'umbrella', roofColor: 'red', crowd: 18, alight: 0 },
+  { en: 'DHAKA AIRPORT', bn: 'ঢাকা বিমানবন্দর', code: 'DAA', km: 21, platform: [-260, 480], roof: 'canopy', roofColor: 'blue', crowd: 14, alight: 5 },
+  { en: 'GAZIPUR', bn: 'গাজীপুর', code: 'GZP', km: 36, platform: [-220, 420], roof: 'shelter', roofColor: 'green', crowd: 10, alight: 6 },
+  { en: 'COMILLA', bn: 'কুমিল্লা', code: 'CO', km: 173, platform: [-240, 450], roof: 'shelter', roofColor: 'red', crowd: 12, alight: 8 },
+  { en: 'CHITTAGONG', bn: 'চট্টগ্রাম', code: 'CTG', km: 321, platform: [-300, 500], roof: 'canopy', roofColor: 'blue', crowd: 0, alight: 20 }
+];
+
+const PX_PER_KM = 120;
+const STATIONS = ROUTE.map((s, i) => ({ ...s, index: i, dist: s.km * PX_PER_KM }));
+const LAST_STATION = STATIONS.length - 1;
+
+// Simulation State
+const sim = {
+  state: 'STOPPED', stopPhase: 'SETTLE', phaseT: 0, speed: 0, dist: 0,
+  station: 0, doorOpen: 0, clock: 0, hour: 5.6, timeMode: 0, monsoonMode: 0, rainLevel: 0,
+  thunderstorm: false, thunderTimer: 0, flash: false, paused: false, speedMult: 1,
+  title: true, titleSel: 1, complete: false
+};
+
+const drive = {
+  on: false, engine: 'OFF', engineT: 0, rpm: 0, lever: 0, headlight: true, horn: false,
+  tripT: 0, limit: 100, over: false, pts: { stops: 0, time: 0, pax: 0, penalty: 0 }, comfort: 100, pax: 0, final: null
+};
+
+// Particles
+const smokePool = [], sparkPool = [], rainPool = [];
+
+// Sound Synth (Web Audio API)
+let audioCtx = null, muted = false;
+
+function initAudio() {
+  if (audioCtx) return;
+  try {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  } catch(e) {}
+}
+
+function playTone(freq, type, dur, vol) {
+  if (!audioCtx || muted) return;
+  const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+  o.type = type; o.frequency.value = freq;
+  g.gain.setValueAtTime(vol, audioCtx.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + dur);
+  o.connect(g); g.connect(audioCtx.destination);
+  o.start(); o.stop(audioCtx.currentTime + dur);
+}
+
+function playAir() {
+  if (!audioCtx || muted) return;
+  const bufferSize = audioCtx.sampleRate * 0.25, buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1;
+  const noise = audioCtx.createBufferSource(); noise.buffer = buffer;
+  const filter = audioCtx.createBiquadFilter(); filter.type = 'highpass'; filter.frequency.value = 1500;
+  const gain = audioCtx.createGain(); gain.gain.setValueAtTime(0.18, audioCtx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.25);
+  noise.connect(filter); filter.connect(gain); gain.connect(audioCtx.destination);
+  noise.start();
+}
+
+function playThunder() {
+  if (!audioCtx || muted) return;
+  const bufferSize = audioCtx.sampleRate * 1.5, buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < bufferSize; i++) data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (audioCtx.sampleRate * 0.4));
+  const noise = audioCtx.createBufferSource(); noise.buffer = buffer;
+  const filter = audioCtx.createBiquadFilter(); filter.type = 'lowpass'; filter.frequency.value = 350;
+  const gain = audioCtx.createGain(); gain.gain.setValueAtTime(0.4, audioCtx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 1.5);
+  noise.connect(filter); filter.connect(gain); gain.connect(audioCtx.destination);
+  noise.start();
+}
+
+function playHorn() {
+  if (!audioCtx || muted) return;
+  playTone(311, 'sawtooth', 0.4, 0.12);
+  playTone(370, 'sawtooth', 0.4, 0.12);
+}
+
+// Key & Event Handlers
+document.addEventListener('keydown', e => {
+  initAudio();
+  if (sim.complete) {
+    if (e.code === 'Enter' || e.code === 'Space' || e.code === 'KeyR') restartTrip();
+    return;
+  }
+  if (sim.title) {
+    if (e.code === 'ArrowLeft' || e.code === 'ArrowRight') sim.titleSel ^= 1;
+    if (e.code === 'Enter' || e.code === 'Space') startTrip(sim.titleSel === 1);
+    if (e.code === 'KeyC') startTrip(true);
+    syncUI();
+    return;
+  }
+  switch (e.code) {
+    case 'KeyC': toggleMode(); break;
+    case 'KeyE': toggleEngine(); break;
+    case 'ArrowUp': setLever(drive.lever + 1); break;
+    case 'ArrowDown': setLever(drive.lever - 1); break;
+    case 'KeyB': setLever(-5); break;
+    case 'KeyO': toggleDoors(); break;
+    case 'KeyH': drive.horn = true; playHorn(); break;
+    case 'KeyL': drive.headlight = !drive.headlight; break;
+    case 'KeyP': case 'Space': sim.paused = !sim.paused; break;
+    case 'KeyN': skipNext(); break;
+    case 'KeyT': cycleTime(); break;
+    case 'KeyW': cycleWeather(); break;
+    case 'KeyM': muted = !muted; break;
+  }
+  syncUI();
+});
+
+document.addEventListener('keyup', e => { if (e.code === 'KeyH') drive.horn = false; });
+
+canvas.addEventListener('click', e => {
+  initAudio();
+  if (sim.complete) restartTrip();
+  else if (sim.title) startTrip(1);
+});
+
+// UI Buttons
+const btn = id => document.getElementById(id);
+btn('b-mode').onclick = () => { initAudio(); if (sim.complete) restartTrip(); else toggleMode(); syncUI(); };
+btn('b-engine').onclick = () => { initAudio(); toggleEngine(); syncUI(); };
+btn('b-power').onclick = () => { initAudio(); setLever(drive.lever + 1); syncUI(); };
+btn('b-brake').onclick = () => { initAudio(); setLever(drive.lever - 1); syncUI(); };
+btn('b-doors').onclick = () => { initAudio(); toggleDoors(); syncUI(); };
+btn('b-horn').onmousedown = () => { initAudio(); drive.horn = true; playHorn(); };
+btn('b-horn').onmouseup = () => { drive.horn = false; };
+btn('b-light').onclick = () => { drive.headlight = !drive.headlight; syncUI(); };
+btn('b-pause').onclick = () => { sim.paused = !sim.paused; syncUI(); };
+btn('b-speed').onclick = () => { sim.speedMult = sim.speedMult === 1 ? 2 : sim.speedMult === 2 ? 4 : 1; btn('b-speed').innerText = sim.speedMult + 'x'; };
+btn('b-skip').onclick = () => { skipNext(); };
+btn('b-time').onclick = () => { cycleTime(); };
+btn('b-rain').onclick = () => { cycleWeather(); };
+btn('b-mute').onclick = () => { muted = !muted; btn('b-mute').innerText = muted ? 'MUTED' : 'SOUND 🔊'; };
+
+function startTrip(driving) {
+  sim.title = false;
+  sim.complete = false;
+  drive.on = !!driving;
+  if (driving) { drive.engine = 'OFF'; drive.rpm = 0; }
+  else { drive.engine = 'ON'; drive.rpm = 0.6; }
+  syncUI();
+}
+
+function restartTrip() {
+  sim.complete = false;
+  sim.station = 0;
+  sim.dist = 0;
+  sim.speed = 0;
+  sim.state = 'STOPPED';
+  sim.stopPhase = 'SETTLE';
+  drive.lever = 0;
+  drive.engine = 'OFF';
+  drive.rpm = 0;
+  syncUI();
+}
+
+function toggleMode() {
+  drive.on = !drive.on;
+  if (drive.on) { drive.engine = 'OFF'; drive.rpm = 0; }
+  else { drive.engine = 'ON'; drive.rpm = 0.6; }
+  syncUI();
+}
+
+function cycleTime() {
+  sim.timeMode = (sim.timeMode + 1) % 5;
+  const labels = ["TIME AUTO", "DAWN 🌅", "DAY ☀️", "DUSK 🌇", "NIGHT 🌙"];
+  btn('b-time').innerHTML = `<span>${labels[sim.timeMode]}</span>`;
+}
+
+function cycleWeather() {
+  sim.monsoonMode = (sim.monsoonMode + 1) % 5;
+  const labels = ["AUTO", "CLEAR", "DRIZZLE", "HEAVY RAIN", "THUNDERSTORM ⚡"];
+  btn('b-rain').innerHTML = `<span>${labels[sim.monsoonMode]}</span>`;
+  if (sim.monsoonMode === 4) btn('b-rain').classList.add('active');
+  else btn('b-rain').classList.remove('active');
+}
+
+function toggleEngine() {
+  if (sim.complete) return;
+  if (drive.engine === 'OFF') { drive.engine = 'CRANK'; drive.engineT = 0; playAir(); }
+  else if (drive.engine === 'ON') { drive.engine = 'OFF'; drive.rpm = 0; }
+}
+
+function setLever(n) {
+  if (sim.complete) return;
+  drive.lever = Math.max(-5, Math.min(8, n));
+  if (drive.lever === -5) playAir();
+}
+
+function toggleDoors() {
+  if (sim.complete) return;
+  if (sim.state === 'STOPPED') {
+    if (sim.doorOpen === 0) { sim.doorOpen = 1; playAir(); }
+    else { sim.doorOpen = 0; playTone(600, 'triangle', 0.2, 0.1); }
+  }
+}
+
+function getUpcomingStationIndex() {
+  if (sim.state === 'STOPPED') return sim.station;
+  return Math.min(LAST_STATION, sim.station + 1);
+}
+
+function skipNext() {
+  if (sim.station < LAST_STATION) {
+    sim.station++;
+    sim.dist = STATIONS[sim.station].dist;
+    sim.speed = 0;
+    sim.state = 'STOPPED';
+    if (sim.station === LAST_STATION) finishJourney();
+  }
+}
+
+function finishJourney() {
+  sim.complete = true;
+  sim.speed = 0;
+  sim.state = 'STOPPED';
+}
+
+function syncUI() {
+  const driving = drive.on && !sim.title;
+  btn('b-mode').firstElementChild.innerText = driving ? 'DRIVE' : 'AUTO';
+  btn('b-engine').hidden = !driving;
+  btn('b-power').hidden = !driving;
+  btn('b-brake').hidden = !driving;
+  btn('b-doors').hidden = !driving;
+  btn('b-horn').hidden = !driving;
+  btn('b-light').hidden = !driving;
+}
+
+// Game Loop
+let lastT = performance.now();
+function loop(now) {
+  const dt = Math.min(0.1, (now - lastT) / 1000) * (sim.paused ? 0 : sim.speedMult);
+  lastT = now;
+  update(dt);
+  render();
+  requestAnimationFrame(loop);
+}
+
+function update(dt) {
+  if (sim.title || sim.paused) return;
+
+  if (sim.complete) {
+    sim.speed = 0;
+    sim.state = 'STOPPED';
+    return;
+  }
+
+  sim.clock += dt;
+
+  // Time of Day Detail
+  if (sim.timeMode === 0) {
+    sim.hour = 5.6 + (sim.dist / (321 * PX_PER_KM)) * (13.5 - 5.6);
+  } else if (sim.timeMode === 1) sim.hour = 6.25;
+  else if (sim.timeMode === 2) sim.hour = 12.0;
+  else if (sim.timeMode === 3) sim.hour = 18.5;
+  else if (sim.timeMode === 4) sim.hour = 22.0;
+
+  // Weather Logic
+  if (sim.monsoonMode === 0) {
+    sim.rainLevel = (sim.station >= 1 && sim.station <= 3) ? 0.6 : 0;
+    sim.thunderstorm = (sim.station === 2);
+  } else if (sim.monsoonMode === 1) { sim.rainLevel = 0; sim.thunderstorm = false; }
+  else if (sim.monsoonMode === 2) { sim.rainLevel = 0.35; sim.thunderstorm = false; }
+  else if (sim.monsoonMode === 3) { sim.rainLevel = 0.85; sim.thunderstorm = false; }
+  else if (sim.monsoonMode === 4) { sim.rainLevel = 1.0; sim.thunderstorm = true; }
+
+  if (sim.thunderstorm) {
+    sim.thunderTimer -= dt;
+    if (sim.thunderTimer <= 0) {
+      sim.thunderTimer = 4.0 + Math.random() * 5.0;
+      sim.flash = true;
+      playThunder();
+      setTimeout(() => { sim.flash = false; }, 150);
+    }
+  }
+
+  // Engine
+  if (drive.engine === 'CRANK') {
+    drive.engineT += dt;
+    if (drive.engineT >= 2.2) { drive.engine = 'ON'; drive.rpm = 0.5; }
+  } else if (drive.engine === 'ON') {
+    const target = drive.on ? 0.3 + 0.7 * Math.max(0, drive.lever) / 8 : 0.6;
+    drive.rpm += (target - drive.rpm) * dt * 2;
+  }
+
+  // Physics & Acceleration
+  if (drive.on) {
+    if (sim.state === 'STOPPED') {
+      if (drive.lever > 0 && drive.engine === 'ON' && sim.doorOpen === 0) sim.state = 'DRIVING';
+    } else {
+      const power = (drive.lever > 0 && drive.engine === 'ON' && sim.doorOpen === 0) ? drive.lever / 8 : 0;
+      const trac = power * 15;
+      const brake = drive.lever === -5 ? 28 : drive.lever < 0 ? -drive.lever * 4.5 : 0;
+      const drag = sim.speed > 0 ? 0.5 + 0.00035 * sim.speed * sim.speed + brake : 0;
+      sim.speed = Math.max(0, sim.speed + (trac - drag) * dt);
+      sim.dist += sim.speed * dt;
+
+      if (sim.station < LAST_STATION && STATIONS[LAST_STATION].dist - sim.dist <= 0) {
+        sim.station = LAST_STATION;
+        finishJourney();
+      }
+    }
+  } else {
+    // Auto Pilot
+    if (sim.state === 'STOPPED') {
+      if (sim.station === LAST_STATION) { finishJourney(); return; }
+      sim.phaseT += dt;
+      if (sim.phaseT > 3) { sim.doorOpen = 0; sim.state = 'TRAVELING'; sim.phaseT = 0; }
+    } else {
+      sim.speed = 84;
+      sim.dist += sim.speed * dt;
+      if (sim.station < LAST_STATION && STATIONS[sim.station + 1].dist - sim.dist <= 0) {
+        sim.station++;
+        sim.dist = STATIONS[sim.station].dist;
+        sim.speed = 0;
+        sim.state = 'STOPPED';
+        if (sim.station === LAST_STATION) finishJourney();
+        else sim.doorOpen = 1;
+      }
+    }
+  }
+
+  // Smoke
+  if (drive.engine === 'ON' && Math.random() < 0.4) {
+    smokePool.push({ x: 268, y: H - 58, vx: -1.5 - sim.speed * 0.5, vy: -1.2, r: 2.5, a: 1 });
+  }
+  for (let i = smokePool.length - 1; i >= 0; i--) {
+    const p = smokePool[i];
+    p.x += p.vx * dt * 30; p.y += p.vy * dt * 30; p.r += dt * 3; p.a -= dt * 0.8;
+    if (p.a <= 0) smokePool.splice(i, 1);
+  }
+
+  // Rain
+  if (sim.rainLevel > 0.1 && Math.random() < sim.rainLevel) {
+    rainPool.push({ x: Math.random() * (W + 100), y: -10, vy: 8 + Math.random() * 4 });
+  }
+  for (let i = rainPool.length - 1; i >= 0; i--) {
+    const r = rainPool[i];
+    r.x -= 2; r.y += r.vy;
+    if (r.y > H) rainPool.splice(i, 1);
+  }
+}
+
+function drawWheel(x, y, angle) {
+  ctx.fillStyle = '#1e1e23'; ctx.beginPath(); ctx.arc(x, y, 3, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = '#b4b9be'; ctx.lineWidth = 1; ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(x - Math.cos(angle) * 2.5, y - Math.sin(angle) * 2.5);
+  ctx.lineTo(x + Math.cos(angle) * 2.5, y + Math.sin(angle) * 2.5);
+  ctx.stroke();
+}
+
+function render() {
+  // Celestial Sky
+  if (sim.flash) ctx.fillStyle = '#e6ecff';
+  else if (sim.thunderstorm) ctx.fillStyle = '#1e2332';
+  else if (sim.hour >= 5.0 && sim.hour < 7.0) ctx.fillStyle = '#e69682';
+  else if (sim.hour >= 7.0 && sim.hour < 18.0) ctx.fillStyle = '#7db9eb';
+  else if (sim.hour >= 18.0 && sim.hour < 19.5) ctx.fillStyle = '#d2644b';
+  else ctx.fillStyle = '#0f142d';
+  ctx.fillRect(0, 0, W, H);
+
+  // Celestial Bodies
+  if (!sim.thunderstorm) {
+    if (sim.hour >= 19.5 || sim.hour < 5.0) {
+      ctx.fillStyle = '#f0f0d2'; ctx.beginPath(); ctx.arc(250, 22, 7, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#0f142d'; ctx.beginPath(); ctx.arc(247, 20, 6, 0, Math.PI * 2); ctx.fill();
+    } else if (sim.hour >= 5.0 && sim.hour < 7.0) {
+      ctx.fillStyle = '#ffd778'; ctx.beginPath(); ctx.arc(55, 45, 8, 0, Math.PI * 2); ctx.fill();
+    } else if (sim.hour >= 18.0 && sim.hour < 19.5) {
+      ctx.fillStyle = '#ff6e3c'; ctx.beginPath(); ctx.arc(240, 48, 9, 0, Math.PI * 2); ctx.fill();
+    } else {
+      ctx.fillStyle = '#ffeb8c'; ctx.beginPath(); ctx.arc(55, 28, 8, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+
+  // Clouds
+  ctx.fillStyle = sim.thunderstorm ? 'rgba(40,45,60,0.8)' : 'rgba(255,255,255,0.85)';
+  const cloudOffset = (sim.clock * 12) % (W * 2);
+  for (let i = 0; i < 5; i++) {
+    const cx = ((i * 110 + cloudOffset) % (W + 80)) - 40;
+    const cy = 15 + (i % 3) * 14;
+    ctx.fillRect(cx, cy, 40, 12); ctx.fillRect(cx + 8, cy - 5, 24, 10);
+  }
+
+  // Tree Canopy Horizon
+  ctx.fillStyle = '#1e5f2d';
+  for (let x = 0; x < W; x += 4) {
+    const h = 14 + Math.sin((x + sim.dist * 0.1) * 0.02) * 8;
+    ctx.fillRect(x, H - 92 - h, 4, h + 40);
+  }
+
+  // Paddy Fields
+  ctx.fillStyle = '#55af4b'; ctx.fillRect(0, H - 75, W, 48);
+
+  ctx.fillStyle = '#4ba041';
+  for (let x = -20; x < W + 20; x += 32) {
+    const gx = x - (sim.dist * 0.4) % 32;
+    ctx.fillRect(gx, H - 65, 16, 20);
+  }
+
+  // Ponds
+  for (let i = 0; i < 4; i++) {
+    const px = ((i * 450 - sim.dist * 0.5) % (W * 2.5) + W * 2.5) % (W * 2.5) - 60;
+    if (px < W + 40) {
+      ctx.fillStyle = '#3878b4'; ctx.beginPath(); ctx.ellipse(px, H - 58, 21, 7, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = 'rgba(110,180,240,0.7)'; ctx.beginPath(); ctx.ellipse(px + 4, H - 56, 13, 3, 0, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+
+  // Tin Huts & Cows
+  for (let i = 0; i < 10; i++) {
+    const ox = ((i * 320 - sim.dist * 0.5) % (W * 3) + W * 3) % (W * 3) - 40;
+    if (ox < W + 40) {
+      if (i % 2 === 0) {
+        ctx.fillStyle = '#a5a9af'; ctx.fillRect(ox, H - 82, 16, 5);
+        ctx.fillStyle = '#875f41'; ctx.fillRect(ox + 2, H - 77, 12, 8);
+      } else {
+        ctx.fillStyle = '#ffffff'; ctx.fillRect(ox, H - 52, 6, 4);
+        ctx.fillStyle = '#5a3c1e'; ctx.fillRect(ox + 2, H - 51, 2, 2);
+      }
+    }
+  }
+
+  // Drooping Telegraph Wires & Poles
+  const poleSpacing = 90;
+  ctx.strokeStyle = '#19191e'; ctx.lineWidth = 1;
+  for (let x = -poleSpacing; x < W + poleSpacing; x += poleSpacing) {
+    const pWorldX = Math.floor((sim.dist + x) / poleSpacing) * poleSpacing;
+    const sX1 = pWorldX - sim.dist, sX2 = sX1 + poleSpacing;
+    ctx.beginPath(); ctx.moveTo(sX1, H - 85); ctx.quadraticCurveTo((sX1 + sX2) / 2, H - 77, sX2, H - 85); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(sX1, H - 89); ctx.quadraticCurveTo((sX1 + sX2) / 2, H - 81, sX2, H - 89); ctx.stroke();
+  }
+  ctx.fillStyle = '#6e4628';
+  for (let x = -poleSpacing; x < W + poleSpacing; x += poleSpacing) {
+    const pWorldX = Math.floor((sim.dist + x) / poleSpacing) * poleSpacing;
+    const px = pWorldX - sim.dist;
+    ctx.fillRect(px, H - 88, 3, 30); ctx.fillRect(px - 4, H - 86, 11, 2); ctx.fillRect(px - 4, H - 82, 11, 2);
+  }
+
+  // Tracks & Sleepers
+  ctx.fillStyle = '#55555a'; ctx.fillRect(0, H - 35, W, 15);
+  ctx.fillStyle = '#413020';
+  for (let x = -10; x < W + 10; x += 8) {
+    if (Math.floor((sim.dist + x) / 8) % 2 === 0) ctx.fillRect(x, H - 32, 4, 10);
+  }
+  ctx.fillStyle = '#b9bece'; ctx.fillRect(0, H - 33, W, 2); ctx.fillRect(0, H - 25, W, 2);
+
+  // Bridges
+  const b1 = 32 * PX_PER_KM - sim.dist, b2 = 90 * PX_PER_KM - sim.dist;
+  [b1, b2].forEach(bx => {
+    if (bx > -400 && bx < W + 400) {
+      ctx.fillStyle = '#235591'; ctx.fillRect(Math.max(0, bx), H - 24, 350, 24);
+      ctx.fillStyle = '#6e737d';
+      for (let k = 0; k < 4; k++) ctx.fillRect(bx + k * 90, H - 24, 8, 24);
+    }
+  });
+
+  // Train (Blue Locomotive Engine + 5 Green Coaches)
+  const tx = 230;
+  const wheelAngle = (sim.dist * 0.25) % (Math.PI * 2);
+
+  ctx.fillStyle = '#1b4a88'; ctx.fillRect(tx, H - 54, 48, 22);
+  ctx.fillStyle = '#e6b828'; ctx.fillRect(tx, H - 44, 48, 4); ctx.fillRect(tx + 42, H - 54, 6, 22);
+  ctx.fillStyle = '#324664'; ctx.fillRect(tx + 26, H - 52, 12, 7);
+  ctx.fillStyle = '#000'; ctx.fillRect(tx + 38, H - 58, 4, 5);
+
+  drawWheel(tx + 8, H - 30, wheelAngle);
+  drawWheel(tx + 15, H - 30, wheelAngle);
+  drawWheel(tx + 22, H - 30, wheelAngle);
+  drawWheel(tx + 32, H - 30, wheelAngle);
+  drawWheel(tx + 39, H - 30, wheelAngle);
+  drawWheel(tx + 46, H - 30, wheelAngle);
+
+  if (drive.headlight && drive.engine !== 'OFF') {
+    ctx.fillStyle = sim.thunderstorm ? 'rgba(255,240,150,0.5)' : 'rgba(255,240,150,0.3)';
+    ctx.beginPath(); ctx.moveTo(tx + 48, H - 46); ctx.lineTo(W, H - 75); ctx.lineTo(W, H - 25); ctx.fill();
+  }
+
+  for (let c = 1; c <= 5; c++) {
+    const cx = tx - c * 52;
+    ctx.fillStyle = '#404040'; ctx.fillRect(cx + 48, H - 42, 4, 2);
+    ctx.fillStyle = '#1c7442'; ctx.fillRect(cx, H - 52, 48, 20);
+    ctx.fillStyle = '#d62828'; ctx.fillRect(cx, H - 45, 48, 3);
+    ctx.fillStyle = '#e6b828'; ctx.fillRect(cx, H - 42, 48, 1);
+    ctx.fillStyle = '#c0c5cc'; ctx.fillRect(cx - 1, H - 54, 50, 3);
+
+    for (let wx = cx + 4; wx < cx + 42; wx += 9) {
+      if (wx === cx + 22 && sim.doorOpen > 0.1) {
+        ctx.fillStyle = '#141419'; ctx.fillRect(wx, H - 50, 6, 16);
+      } else {
+        ctx.fillStyle = '#ffe664'; ctx.fillRect(wx, H - 48, 5, 6);
+        ctx.fillStyle = '#281e14'; ctx.fillRect(wx + 1, H - 46, 3, 3);
+      }
+    }
+    drawWheel(cx + 8, H - 30, wheelAngle);
+    drawWheel(cx + 15, H - 30, wheelAngle);
+    drawWheel(cx + 34, H - 30, wheelAngle);
+    drawWheel(cx + 41, H - 30, wheelAngle);
+  }
+
+  // FRONTSIDED PLATFORM & STATIONS
+  STATIONS.forEach(s => {
+    const sx = s.dist - sim.dist;
+    if (sx > -400 && sx < W + 400) {
+      ctx.fillStyle = '#becee0'; ctx.fillRect(sx - 200, H - 30, 400, 12);
+      ctx.fillStyle = '#ffe664'; ctx.fillRect(sx - 200, H - 30, 400, 2);
+      ctx.fillStyle = '#646c78'; ctx.fillRect(sx - 200, H - 18, 400, 18);
+
+      ctx.fillStyle = '#505a64';
+      for (let px = sx - 180; px < sx + 180; px += 45) {
+        ctx.fillRect(px, H - 65, 4, 36);
+      }
+
+      ctx.fillStyle = s.roofColor === 'red' ? '#b43228' : s.roofColor === 'blue' ? '#2850a0' : '#288246';
+      ctx.fillRect(sx - 200, H - 72, 400, 8);
+
+      ctx.fillStyle = '#0f1928'; ctx.fillRect(sx - 62, H - 64, 124, 26);
+      ctx.fillStyle = '#fafae6'; ctx.fillRect(sx - 60, H - 62, 120, 22);
+
+      ctx.fillStyle = '#b41414'; ctx.font = 'bold 10px sans-serif';
+      ctx.fillText(s.bn, sx - 52, H - 51);
+
+      ctx.fillStyle = '#141e46'; ctx.font = 'bold 9px monospace';
+      ctx.fillText(s.en + ' (' + s.code + ')', sx - 52, H - 42);
+
+      ctx.fillStyle = '#a06432'; ctx.fillRect(sx + 40, H - 44, 25, 14);
+      ctx.fillStyle = '#e62828'; ctx.fillRect(sx + 38, H - 47, 29, 3);
+      ctx.fillStyle = '#fff'; ctx.font = '8px sans-serif'; ctx.fillText('চা', sx + 48, H - 35);
+
+      ctx.fillStyle = '#d28c64';
+      for (let i = 0; i < s.crowd; i++) {
+        const px = sx - 160 + (i * 18) % 320;
+        ctx.beginPath(); ctx.arc(px + 2, H - 42, 2.5, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = i % 2 === 0 ? '#c83232' : '#2878b4';
+        ctx.fillRect(px, H - 39, 4, 10);
+      }
+    }
+  });
+
+  // Next Station Banner Overlay
+  if (!sim.complete) {
+    const upcomingIdx = getUpcomingStationIndex();
+    if (upcomingIdx < STATIONS.length) {
+      const upcoming = STATIONS[upcomingIdx];
+      ctx.fillStyle = 'rgba(15,22,35,0.92)'; ctx.beginPath(); ctx.roundRect(60, 26, 200, 18, 6); ctx.fill();
+      ctx.strokeStyle = '#3c506e'; ctx.lineWidth = 1; ctx.stroke();
+      ctx.fillStyle = '#ffe664'; ctx.font = 'bold 9px sans-serif';
+
+      const bannerText = (sim.state === 'STOPPED')
+        ? 'AT STATION: ' + upcoming.bn + ' / ' + upcoming.en
+        : 'NEXT STATION: ' + upcoming.bn + ' / ' + upcoming.en;
+      ctx.fillText(bannerText, 66, 39);
+    }
+  }
+
+  // Particles
+  ctx.strokeStyle = 'rgba(180,200,230,0.6)'; ctx.lineWidth = 1;
+  rainPool.forEach(r => {
+    ctx.beginPath(); ctx.moveTo(r.x, r.y); ctx.lineTo(r.x - 3, r.y + 7); ctx.stroke();
+  });
+
+  smokePool.forEach(p => {
+    ctx.fillStyle = `rgba(220,220,220,${p.a})`;
+    ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.fill();
+  });
+
+  // Top Route Map
+  const mapW = 180, mapH = 16, mapX = (W - mapW) / 2, mapY = 6;
+  ctx.fillStyle = 'rgba(14,18,28,0.88)';
+  ctx.beginPath(); ctx.roundRect(mapX, mapY, mapW, mapH, 8); ctx.fill();
+  ctx.strokeStyle = '#3c4d66'; ctx.lineWidth = 1; ctx.stroke();
+
+  ctx.fillStyle = '#ffffff'; ctx.fillRect(mapX + 10, mapY + 8, mapW - 20, 1);
+  const totalD = STATIONS[LAST_STATION].dist;
+  STATIONS.forEach(s => {
+    const sx = mapX + 10 + (s.dist / totalD) * (mapW - 20);
+    ctx.fillStyle = sim.station === s.index ? '#ffe664' : '#ffffff';
+    ctx.fillRect(sx - 2, mapY + 6, 4, 4);
+    ctx.font = '7px sans-serif'; ctx.fillText(s.code, sx - 6, mapY + 5);
+  });
+  const trainPx = mapX + 10 + Math.min(mapW - 20, Math.max(0, (sim.dist / totalD) * (mapW - 20)));
+  ctx.fillStyle = '#64f078'; ctx.fillRect(trainPx - 2, mapY + 4, 5, 8);
+
+  // Driver HUD Panel
+  if (drive.on && !sim.title && !sim.complete) {
+    ctx.fillStyle = 'rgba(18,22,32,0.9)'; ctx.fillRect(4, 48, 85, 42);
+    ctx.fillStyle = '#fff'; ctx.font = 'bold 10px monospace';
+    ctx.fillText(`${Math.round(sim.speed)} KM/H`, 8, 62);
+    ctx.font = '8px monospace';
+    const lStr = drive.lever > 0 ? 'P' + drive.lever : drive.lever === -5 ? 'EB' : drive.lever < 0 ? 'B' + (-drive.lever) : 'N';
+    ctx.fillText(`LEVER: ${lStr}`, 8, 74);
+    ctx.fillText(`ENG: ${drive.engine}`, 8, 84);
+
+    ctx.fillStyle = 'rgba(18,22,32,0.9)'; ctx.fillRect(W - 96, 48, 92, 42);
+    const hrs = Math.floor(sim.hour), mins = Math.floor((sim.hour - hrs) * 60);
+    const ampm = hrs >= 12 ? 'PM' : 'AM';
+    const hrs12 = (hrs % 12 === 0) ? 12 : hrs % 12;
+
+    ctx.fillStyle = '#ffe664'; ctx.font = 'bold 9px monospace';
+    ctx.fillText(`${String(hrs12).padStart(2,'0')}:${String(mins).padStart(2,'0')} ${ampm}`, W - 92, 60);
+
+    const phase = sim.hour >= 5 && sim.hour < 7 ? 'DAWN' : sim.hour >= 7 && sim.hour < 18 ? 'DAY' : sim.hour >= 18 && sim.hour < 19.5 ? 'DUSK' : 'NIGHT';
+    ctx.fillStyle = '#fff'; ctx.font = '8px monospace';
+    ctx.fillText(`PHASE: ${phase}`, W - 92, 72);
+    ctx.fillStyle = '#64f078'; ctx.fillText(`ON TIME`, W - 92, 84);
+  }
+
+  // Title Screen
+  if (sim.title) {
+    ctx.fillStyle = 'rgba(15,20,30,0.94)'; ctx.fillRect(20, 15, W - 40, H - 30);
+    ctx.fillStyle = '#ffe664'; ctx.font = 'bold 12px sans-serif'; ctx.fillText('INTERCITY PIXEL TRAIN (বাংলাদেশ রেলওয়ে)', 35, 36);
+    ctx.fillStyle = '#fff'; ctx.font = 'bold 9px sans-serif'; ctx.fillText('KAMALAPUR -> AIRPORT -> GAZIPUR -> COMILLA -> CHITTAGONG', 25, 54);
+    ctx.fillStyle = '#aaa'; ctx.font = '9px monospace'; ctx.fillText('DHK > DAA > GZP > CO > CTG (321 KM)', 55, 68);
+
+    ctx.fillStyle = sim.titleSel === 0 ? '#ffea64' : '#334'; ctx.fillRect(55, 90, 90, 24);
+    ctx.fillStyle = '#fff'; ctx.fillText('WATCH (AUTO)', 63, 105);
+
+    ctx.fillStyle = sim.titleSel === 1 ? '#ffea64' : '#334'; ctx.fillRect(175, 90, 90, 24);
+    ctx.fillStyle = '#fff'; ctx.fillText('DRIVE TRAIN', 185, 105);
+    ctx.fillStyle = '#ffe664'; ctx.fillText('CLICK OR PRESS SPACE TO START', 75, 142);
+  }
+
+  // JOURNEY COMPLETE / CONCLUDES HERE PANEL OVERLAY
+  if (sim.complete) {
+    ctx.fillStyle = 'rgba(15,22,38,0.95)'; ctx.fillRect(25, 15, W - 50, H - 30);
+    ctx.strokeStyle = '#3c506e'; ctx.lineWidth = 1; ctx.strokeRect(25, 15, W - 50, H - 30);
+
+    ctx.fillStyle = '#ffe664'; ctx.font = 'bold 13px sans-serif';
+    ctx.fillText('JOURNEY CONCLUDES HERE! (যাত্রা সমাপ্ত)', 40, 36);
+
+    ctx.fillStyle = '#ffffff'; ctx.font = 'bold 9px sans-serif';
+    ctx.fillText('CHITTAGONG TERMINUS REACHED | 321 KM', 55, 52);
+
+    ctx.font = '9px monospace'; ctx.fillStyle = '#d0e0f0';
+    ctx.fillText('STOP ACCURACY: 500 PTS', 60, 70);
+    ctx.fillText('PUNCTUALITY:   200 PTS', 60, 84);
+    ctx.fillText('COMFORT:       100%', 60, 98);
+
+    ctx.fillStyle = '#64f078'; ctx.font = 'bold 11px monospace';
+    ctx.fillText('TOTAL SCORE: 3400 PTS', 90, 116);
+
+    ctx.fillStyle = '#ffe664'; ctx.fillText('RATING: * * *', 115, 130);
+
+    // Restart Banner
+    ctx.fillStyle = '#288246'; ctx.fillRect(65, 140, 190, 16);
+    ctx.fillStyle = '#ffffff'; ctx.font = 'bold 9px monospace';
+    ctx.fillText('CLICK OR PRESS ENTER TO RESTART', 72, 151);
+  }
+}
+
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
