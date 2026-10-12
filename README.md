@@ -53,7 +53,7 @@ A retro pixel-art train simulator inspired by Bangladesh Railway, featuring the 
 ##  How to Play
 
 ### 1. Web Browser (Instant Play, No Setup Required)
-Simply open `index.html` in any modern web browser (Chrome, Edge, Firefox, Safari).
+Simply open `index.html` in any modern web browser (Chrome, Edge, Firefox, Safari) or click https://shawm21.github.io/Dhaka_CTG-TrainSim/
 
 ### 2. Java Desktop Version
 Compile and run with Java 8 or higher:
