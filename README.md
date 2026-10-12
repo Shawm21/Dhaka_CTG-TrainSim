@@ -8,7 +8,7 @@ A retro pixel-art train simulator inspired by Bangladesh Railway, featuring the 
 
 ---
 
-## 🚉 The Route (5 Stations)
+##  The Route (5 Stations)
 
 | # | Station Name (Bangla) | Station Name (English) | Code | Distance |
 |---|-----------------------|------------------------|------|----------|
@@ -20,7 +20,7 @@ A retro pixel-art train simulator inspired by Bangladesh Railway, featuring the 
 
 ---
 
-## 🎮 Game Controls
+##  Game Controls
 
 | Control | Key | Action |
 |---------|-----|--------|
@@ -39,7 +39,7 @@ A retro pixel-art train simulator inspired by Bangladesh Railway, featuring the 
 
 ---
 
-## 🌟 Key Features
+##  Key Features
 
 - **Bangladesh Railway Class 2900 Blue Locomotive & 5 Green Coaches**: Detailed spoked wheels rotating in sync with train velocity.
 - **Frontsided Platform**: Platform slab, safety lines, station pillars, tea stalls (`চা দোকান`), and passengers are rendered in the foreground in front of the train.
@@ -50,7 +50,7 @@ A retro pixel-art train simulator inspired by Bangladesh Railway, featuring the 
 
 ---
 
-## 🚀 How to Play
+##  How to Play
 
 ### 1. Web Browser (Instant Play, No Setup Required)
 Simply open `index.html` in any modern web browser (Chrome, Edge, Firefox, Safari).
